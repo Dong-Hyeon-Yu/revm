@@ -26,7 +26,7 @@ use once_cell::race::OnceBox;
 pub use revm_primitives as primitives;
 pub use revm_primitives::{
     precompile::{PrecompileError as Error, *},
-    Address, Bytes, HashMap, Log, B256,
+    Address, Bytes, HashMap, HashSet, Log, B256,
 };
 use std::{boxed::Box, vec::Vec};
 

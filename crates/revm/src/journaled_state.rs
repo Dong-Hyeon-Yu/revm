@@ -34,6 +34,9 @@ pub struct JournaledState {
     /// Note that this not include newly loaded accounts, account and storage
     /// is considered warm if it is found in the `State`.
     pub warm_preloaded_addresses: HashSet<Address>,
+
+    pub write_set: HashMap<Address, HashSet<U256>>,
+    pub read_set: HashMap<Address, HashSet<U256>>,
 }
 
 impl JournaledState {
@@ -57,6 +60,8 @@ impl JournaledState {
             depth: 0,
             spec,
             warm_preloaded_addresses,
+            write_set: HashMap::new(),
+            read_set: HashMap::new(),
         }
     }
 
@@ -105,6 +110,8 @@ impl JournaledState {
             // kept, see [Self::new]
             spec: _,
             warm_preloaded_addresses: _,
+            write_set: _,
+            read_set: _,
         } = self;
 
         *transient_storage = TransientStorage::default();
@@ -114,6 +121,19 @@ impl JournaledState {
         let logs = mem::take(logs);
 
         (state, logs)
+    }
+
+    #[inline]
+    pub fn extract_rw_set(
+        &mut self,
+    ) -> (
+        HashMap<Address, HashSet<U256>>,
+        HashMap<Address, HashSet<U256>>,
+    ) {
+        let read_set = std::mem::take(&mut self.read_set);
+        let write_set = std::mem::take(&mut self.write_set);
+
+        (read_set, write_set)
     }
 
     /// Returns the _loaded_ [Account] for the given address.
@@ -656,6 +676,17 @@ impl JournaledState {
                 (value, true)
             }
         };
+
+        match self.read_set.entry(address) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut().insert(key);
+            }
+            Entry::Vacant(vac) => {
+                let mut set = HashSet::new();
+                set.insert(key);
+                vac.insert(set);
+            }
+        }
         Ok(load)
     }
 
@@ -679,6 +710,17 @@ impl JournaledState {
 
         // if there is no original value in dirty return present value, that is our original.
         let slot = acc.storage.get_mut(&key).unwrap();
+
+        match self.write_set.entry(address) {
+            Entry::Occupied(mut occ) => {
+                occ.get_mut().insert(key);
+            }
+            Entry::Vacant(vac) => {
+                let mut set = HashSet::new();
+                set.insert(key);
+                vac.insert(set);
+            }
+        }
 
         // new value is same as present, we don't need to do anything
         if present == new {

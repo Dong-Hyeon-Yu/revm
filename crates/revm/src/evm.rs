@@ -15,6 +15,7 @@ use crate::{
 };
 use core::fmt;
 use revm_interpreter::{CallInputs, CreateInputs};
+use revm_precompile::{HashMap, HashSet};
 use std::vec::Vec;
 
 /// EVM call stack limit.
@@ -366,6 +367,16 @@ impl<EXT, DB: Database> Evm<'_, EXT, DB> {
         post_exec.reward_beneficiary(ctx, result.gas())?;
         // Returns output of transaction.
         post_exec.output(ctx, result)
+    }
+
+    #[inline]
+    pub fn extract_rw_set(
+        &mut self,
+    ) -> (
+        HashMap<Address, HashSet<U256>>,
+        HashMap<Address, HashSet<U256>>,
+    ) {
+        self.context.evm.journaled_state.extract_rw_set()
     }
 }
 
