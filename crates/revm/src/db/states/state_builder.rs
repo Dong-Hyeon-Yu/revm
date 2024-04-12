@@ -1,10 +1,12 @@
 use super::{cache::CacheState, state::DBBox, BundleState, State, TransitionState};
 use crate::db::EmptyDB;
+use core::cell::RefCell;
 use revm_interpreter::primitives::{
     db::{Database, DatabaseRef, WrapDatabaseRef},
     B256,
 };
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 /// Allows building of State and initializing it with different options.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,14 +160,17 @@ impl<DB: Database> StateBuilder<DB> {
             self.with_bundle_prestate.is_some()
         };
         State {
-            cache: self
-                .with_cache_prestate
-                .unwrap_or_else(|| CacheState::new(self.with_state_clear)),
+            cache: Rc::new(RefCell::new(
+                self.with_cache_prestate
+                    .unwrap_or_else(|| CacheState::new(self.with_state_clear)),
+            )),
             database: self.database,
-            transition_state: self.with_bundle_update.then(TransitionState::default),
+            transition_state: self
+                .with_bundle_update
+                .then(|| Rc::new(RefCell::new(TransitionState::default()))),
             bundle_state: self.with_bundle_prestate.unwrap_or_default(),
             use_preloaded_bundle,
-            block_hashes: self.with_block_hashes,
+            block_hashes: Rc::new(RefCell::new(self.with_block_hashes)),
         }
     }
 }

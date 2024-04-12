@@ -4,8 +4,9 @@ use crate::primitives::{
     U256,
 };
 use crate::Database;
+use core::cell::{RefCell, RefMut};
 use core::convert::Infallible;
-use std::vec::Vec;
+use std::{rc::Rc, vec::Vec};
 
 /// A [Database] implementation that stores all state changes in memory.
 pub type InMemoryDB = CacheDB<EmptyDB>;
@@ -22,13 +23,13 @@ pub type InMemoryDB = CacheDB<EmptyDB>;
 pub struct CacheDB<ExtDB> {
     /// Account info where None means it is not existing. Not existing state is needed for Pre TANGERINE forks.
     /// `code` is always `None`, and bytecode can be found in `contracts`.
-    pub accounts: HashMap<Address, DbAccount>,
+    pub accounts: Rc<RefCell<HashMap<Address, DbAccount>>>,
     /// Tracks all contracts by their code hash.
-    pub contracts: HashMap<B256, Bytecode>,
+    pub contracts: Rc<RefCell<HashMap<B256, Bytecode>>>,
     /// All logs that were committed via [DatabaseCommit::commit].
-    pub logs: Vec<Log>,
+    pub logs: Rc<RefCell<Vec<Log>>>,
     /// All cached block hashes from the [DatabaseRef].
-    pub block_hashes: HashMap<U256, B256>,
+    pub block_hashes: Rc<RefCell<HashMap<U256, B256>>>,
     /// The underlying database ([DatabaseRef]) that is used to load data.
     ///
     /// Note: this is read-only, data is never written to this database.
@@ -47,10 +48,10 @@ impl<ExtDB> CacheDB<ExtDB> {
         contracts.insert(KECCAK_EMPTY, Bytecode::new());
         contracts.insert(B256::ZERO, Bytecode::new());
         Self {
-            accounts: HashMap::new(),
-            contracts,
-            logs: Vec::default(),
-            block_hashes: HashMap::new(),
+            accounts: Default::default(),
+            contracts: Rc::new(RefCell::new(contracts)),
+            logs: Default::default(),
+            block_hashes: Default::default(),
             db,
         }
     }
@@ -60,13 +61,15 @@ impl<ExtDB> CacheDB<ExtDB> {
     /// Accounts objects and code are stored separately in the cache, this will take the code from the account and instead map it to the code hash.
     ///
     /// Note: This will not insert into the underlying external database.
-    pub fn insert_contract(&mut self, account: &mut AccountInfo) {
+    pub fn insert_contract(&self, account: &mut AccountInfo) {
         if let Some(code) = &account.code {
             if !code.is_empty() {
                 if account.code_hash == KECCAK_EMPTY {
                     account.code_hash = code.hash_slow();
                 }
                 self.contracts
+                    .as_ref()
+                    .borrow_mut()
                     .entry(account.code_hash)
                     .or_insert_with(|| code.clone());
             }
@@ -79,7 +82,12 @@ impl<ExtDB> CacheDB<ExtDB> {
     /// Insert account info but not override storage
     pub fn insert_account_info(&mut self, address: Address, mut info: AccountInfo) {
         self.insert_contract(&mut info);
-        self.accounts.entry(address).or_default().info = info;
+        self.accounts
+            .as_ref()
+            .borrow_mut()
+            .entry(address)
+            .or_default()
+            .info = info;
     }
 }
 
@@ -87,19 +95,29 @@ impl<ExtDB: DatabaseRef> CacheDB<ExtDB> {
     /// Returns the account for the given address.
     ///
     /// If the account was not found in the cache, it will be loaded from the underlying database.
-    pub fn load_account(&mut self, address: Address) -> Result<&mut DbAccount, ExtDB::Error> {
+    pub fn load_account(
+        &mut self,
+        address: Address,
+    ) -> Result<RefMut<'_, DbAccount>, ExtDB::Error> {
         let db = &self.db;
-        match self.accounts.entry(address) {
-            Entry::Occupied(entry) => Ok(entry.into_mut()),
-            Entry::Vacant(entry) => Ok(entry.insert(
-                db.basic_ref(address)?
-                    .map(|info| DbAccount {
-                        info,
-                        ..Default::default()
-                    })
-                    .unwrap_or_else(DbAccount::new_not_existing),
-            )),
-        }
+        let accounts_lock = self.accounts.as_ref().borrow_mut();
+        Ok(RefMut::map(accounts_lock, |state| {
+            match state.entry(address) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                Entry::Vacant(entry) => entry
+                    .insert(
+                        db.basic_ref(address)
+                            .ok()
+                            .unwrap() // TODO: Must handle DB Error
+                            .map(|info| DbAccount {
+                                info,
+                                ..Default::default()
+                            })
+                            .unwrap_or_else(DbAccount::new_not_existing),
+                    )
+                    .into(),
+            }
+        }))
     }
 
     /// insert account storage without overriding account info
@@ -109,7 +127,7 @@ impl<ExtDB: DatabaseRef> CacheDB<ExtDB> {
         slot: U256,
         value: U256,
     ) -> Result<(), ExtDB::Error> {
-        let account = self.load_account(address)?;
+        let mut account = self.load_account(address)?;
         account.storage.insert(slot, value);
         Ok(())
     }
@@ -120,7 +138,7 @@ impl<ExtDB: DatabaseRef> CacheDB<ExtDB> {
         address: Address,
         storage: HashMap<U256, U256>,
     ) -> Result<(), ExtDB::Error> {
-        let account = self.load_account(address)?;
+        let mut account = self.load_account(address)?;
         account.account_state = AccountState::StorageCleared;
         account.storage = storage.into_iter().collect();
         Ok(())
@@ -128,13 +146,14 @@ impl<ExtDB: DatabaseRef> CacheDB<ExtDB> {
 }
 
 impl<ExtDB> DatabaseCommit for CacheDB<ExtDB> {
-    fn commit(&mut self, changes: HashMap<Address, Account>) {
+    fn commit(&self, changes: HashMap<Address, Account>) {
         for (address, mut account) in changes {
             if !account.is_touched() {
                 continue;
             }
+            let mut accounts_lock = self.accounts.as_ref().borrow_mut();
             if account.is_selfdestructed() {
-                let db_account = self.accounts.entry(address).or_default();
+                let db_account = accounts_lock.entry(address).or_default();
                 db_account.storage.clear();
                 db_account.account_state = AccountState::NotExisting;
                 db_account.info = AccountInfo::default();
@@ -143,7 +162,7 @@ impl<ExtDB> DatabaseCommit for CacheDB<ExtDB> {
             let is_newly_created = account.is_created();
             self.insert_contract(&mut account.info);
 
-            let db_account = self.accounts.entry(address).or_default();
+            let db_account = accounts_lock.entry(address).or_default();
             db_account.info = account.info;
 
             db_account.account_state = if is_newly_created {
@@ -168,8 +187,9 @@ impl<ExtDB> DatabaseCommit for CacheDB<ExtDB> {
 impl<ExtDB: DatabaseRef> Database for CacheDB<ExtDB> {
     type Error = ExtDB::Error;
 
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        let basic = match self.accounts.entry(address) {
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        let mut accounts_lock = self.accounts.as_ref().borrow_mut();
+        let basic = match accounts_lock.entry(address) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => entry.insert(
                 self.db
@@ -184,8 +204,8 @@ impl<ExtDB: DatabaseRef> Database for CacheDB<ExtDB> {
         Ok(basic.info())
     }
 
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        match self.contracts.entry(code_hash) {
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        match self.contracts.as_ref().borrow_mut().entry(code_hash) {
             Entry::Occupied(entry) => Ok(entry.get().clone()),
             Entry::Vacant(entry) => {
                 // if you return code bytes when basic fn is called this function is not needed.
@@ -197,8 +217,8 @@ impl<ExtDB: DatabaseRef> Database for CacheDB<ExtDB> {
     /// Get the value in an account's storage slot.
     ///
     /// It is assumed that account is already loaded.
-    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        match self.accounts.entry(address) {
+    fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        match self.accounts.as_ref().borrow_mut().entry(address) {
             Entry::Occupied(mut acc_entry) => {
                 let acc_entry = acc_entry.get_mut();
                 match acc_entry.storage.entry(index) {
@@ -234,8 +254,8 @@ impl<ExtDB: DatabaseRef> Database for CacheDB<ExtDB> {
         }
     }
 
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
-        match self.block_hashes.entry(number) {
+    fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
+        match self.block_hashes.as_ref().borrow_mut().entry(number) {
             Entry::Occupied(entry) => Ok(*entry.get()),
             Entry::Vacant(entry) => {
                 let hash = self.db.block_hash_ref(number)?;
@@ -250,21 +270,21 @@ impl<ExtDB: DatabaseRef> DatabaseRef for CacheDB<ExtDB> {
     type Error = ExtDB::Error;
 
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        match self.accounts.get(&address) {
+        match self.accounts.as_ref().borrow().get(&address) {
             Some(acc) => Ok(acc.info()),
             None => self.db.basic_ref(address),
         }
     }
 
     fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        match self.contracts.get(&code_hash) {
+        match self.contracts.as_ref().borrow().get(&code_hash) {
             Some(entry) => Ok(entry.clone()),
             None => self.db.code_by_hash_ref(code_hash),
         }
     }
 
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        match self.accounts.get(&address) {
+        match self.accounts.as_ref().borrow().get(&address) {
             Some(acc_entry) => match acc_entry.storage.get(&index) {
                 Some(entry) => Ok(*entry),
                 None => {
@@ -283,7 +303,7 @@ impl<ExtDB: DatabaseRef> DatabaseRef for CacheDB<ExtDB> {
     }
 
     fn block_hash_ref(&self, number: U256) -> Result<B256, Self::Error> {
-        match self.block_hashes.get(&number) {
+        match self.block_hashes.as_ref().borrow().get(&number) {
             Some(entry) => Ok(*entry),
             None => self.db.block_hash_ref(number),
         }
@@ -372,7 +392,7 @@ impl BenchmarkDB {
 impl Database for BenchmarkDB {
     type Error = Infallible;
     /// Get basic account information.
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         if address == Address::ZERO {
             return Ok(Some(AccountInfo {
                 nonce: 1,
@@ -393,17 +413,17 @@ impl Database for BenchmarkDB {
     }
 
     /// Get account code by its hash
-    fn code_by_hash(&mut self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
+    fn code_by_hash(&self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
         Ok(Bytecode::default())
     }
 
     /// Get storage value of address at index.
-    fn storage(&mut self, _address: Address, _index: U256) -> Result<U256, Self::Error> {
+    fn storage(&self, _address: Address, _index: U256) -> Result<U256, Self::Error> {
         Ok(U256::default())
     }
 
     // History related
-    fn block_hash(&mut self, _number: U256) -> Result<B256, Self::Error> {
+    fn block_hash(&self, _number: U256) -> Result<B256, Self::Error> {
         Ok(B256::default())
     }
 }
@@ -476,9 +496,21 @@ mod tests {
         let serialized = serde_json::to_string(&init_state).unwrap();
         let deserialized: CacheDB<EmptyDB> = serde_json::from_str(&serialized).unwrap();
 
-        assert!(deserialized.accounts.get(&account).is_some());
+        assert!(deserialized
+            .accounts
+            .as_ref()
+            .borrow()
+            .get(&account)
+            .is_some());
         assert_eq!(
-            deserialized.accounts.get(&account).unwrap().info.nonce,
+            deserialized
+                .accounts
+                .as_ref()
+                .borrow()
+                .get(&account)
+                .unwrap()
+                .info
+                .nonce,
             nonce
         );
     }

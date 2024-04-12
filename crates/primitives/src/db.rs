@@ -13,23 +13,23 @@ pub trait Database {
     type Error;
 
     /// Get basic account information.
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error>;
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error>;
 
     /// Get account code by its hash.
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error>;
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error>;
 
     /// Get storage value of address at index.
-    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error>;
+    fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error>;
 
     /// Get block hash by block number.
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error>;
+    fn block_hash(&self, number: U256) -> Result<B256, Self::Error>;
 }
 
 /// EVM database commit interface.
 #[auto_impl(&mut, Box)]
 pub trait DatabaseCommit {
     /// Commit changes to the database.
-    fn commit(&mut self, changes: HashMap<Address, Account>);
+    fn commit(&self, changes: HashMap<Address, Account>);
 }
 
 /// EVM database interface.
@@ -71,22 +71,22 @@ impl<T: DatabaseRef> Database for WrapDatabaseRef<T> {
     type Error = T::Error;
 
     #[inline]
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         self.0.basic_ref(address)
     }
 
     #[inline]
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
         self.0.code_by_hash_ref(code_hash)
     }
 
     #[inline]
-    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
+    fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
         self.0.storage_ref(address, index)
     }
 
     #[inline]
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
+    fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
         self.0.block_hash_ref(number)
     }
 }
@@ -111,22 +111,22 @@ impl<'a, E> Database for RefDBWrapper<'a, E> {
     type Error = E;
 
     #[inline]
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         self.db.basic_ref(address)
     }
 
     #[inline]
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
         self.db.code_by_hash_ref(code_hash)
     }
 
     #[inline]
-    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
+    fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
         self.db.storage_ref(address, index)
     }
 
     #[inline]
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
+    fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
         self.db.block_hash_ref(number)
     }
 }

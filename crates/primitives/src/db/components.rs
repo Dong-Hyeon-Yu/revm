@@ -25,23 +25,23 @@ pub enum DatabaseComponentError<SE, BHE> {
 impl<S: State, BH: BlockHash> Database for DatabaseComponents<S, BH> {
     type Error = DatabaseComponentError<S::Error, BH::Error>;
 
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         self.state.basic(address).map_err(Self::Error::State)
     }
 
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
         self.state
             .code_by_hash(code_hash)
             .map_err(Self::Error::State)
     }
 
-    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
+    fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
         self.state
             .storage(address, index)
             .map_err(Self::Error::State)
     }
 
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
+    fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
         self.block_hash
             .block_hash(number)
             .map_err(Self::Error::BlockHash)

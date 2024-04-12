@@ -108,22 +108,22 @@ impl<M: Middleware> Database for EthersDB<M> {
     type Error = M::Error;
 
     #[inline]
-    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         <Self as DatabaseRef>::basic_ref(self, address)
     }
 
     #[inline]
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
         <Self as DatabaseRef>::code_by_hash_ref(self, code_hash)
     }
 
     #[inline]
-    fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
+    fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
         <Self as DatabaseRef>::storage_ref(self, address, index)
     }
 
     #[inline]
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
+    fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
         <Self as DatabaseRef>::block_hash_ref(self, number)
     }
 }
