@@ -7,7 +7,7 @@ use crate::{
     B256, GAS_PER_BLOB, KECCAK_EMPTY, MAX_BLOB_NUMBER_PER_BLOCK, MAX_INITCODE_SIZE, U256,
     VERSIONED_HASH_VERSION_KZG,
 };
-use core::cmp::{min, Ordering};
+use core::cmp::min;
 use std::boxed::Box;
 use std::vec::Vec;
 
